@@ -42,8 +42,8 @@
       </div>
       <div class="header-right">
         <div class="theme-picker">
-          <button type="button" class="btn btn-ghost" id="themeMenuBtn" aria-haspopup="listbox"
-            aria-expanded="false" aria-controls="themeMenu">主题风格</button>
+          <button type="button" class="btn btn-ghost" id="themeMenuBtn" aria-haspopup="listbox" aria-expanded="false"
+            aria-controls="themeMenu">主题风格</button>
           <div class="theme-menu" id="themeMenu" hidden role="listbox" aria-label="主题风格"></div>
         </div>
         <button class="btn btn-ghost" id="editGroupsBtn" title="管理分组">分组管理</button>
@@ -224,6 +224,64 @@
             <span class="data-io-desc">从 JSON 文件恢复数据</span>
           </button>
           <input type="file" id="importFile" accept=".json,application/json" hidden>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sticky-notes-wrap" id="stickyNotesWrap" data-edge="right" data-collapsed="false">
+    <aside class="sticky-notes-panel" id="stickyNotesPanel" aria-label="便签面板">
+      <button type="button" class="sticky-notes-ear" id="stickyCollapseBtn" title="收起面板" aria-label="收起面板">
+        <span class="sticky-notes-ear-icon" aria-hidden="true">›</span>
+      </button>
+      <div class="sticky-notes-panel-body">
+        <div class="sticky-notes-header">
+          <h2 class="sticky-notes-title">便签</h2>
+          <div class="sticky-notes-header-actions">
+            <button type="button" class="sticky-notes-icon-btn sticky-notes-icon-btn-add" id="stickyAddBtn" title="新建便签"
+              aria-label="新建便签">+</button>
+          </div>
+        </div>
+        <div class="sticky-notes-list" id="stickyNotesList"></div>
+      </div>
+    </aside>
+    <button type="button" class="sticky-notes-tab" id="stickyNotesTab" title="单击展开 · 双击查看全部便签" hidden aria-label="便签">
+      <span class="sticky-notes-tab-label"><span>便</span><span>签</span></span>
+    </button>
+  </div>
+
+  <div class="modal-overlay" id="stickyNotesModal" hidden>
+    <div class="modal modal-sticky-notes" role="dialog" aria-labelledby="stickyNotesModalTitle">
+      <div class="modal-header">
+        <h2 id="stickyNotesModalTitle">全部便签</h2>
+        <button class="modal-close" id="closeStickyNotesModal" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="sticky-modal-toolbar">
+          <button type="button" class="btn btn-primary btn-sm" id="stickyModalAddBtn">新建便签</button>
+          <span class="sticky-modal-count" id="stickyModalCount"></span>
+        </div>
+        <div class="sticky-modal-grid" id="stickyModalGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="stickyDeleteConfirmModal" hidden>
+    <div class="modal modal-confirm" role="alertdialog" aria-labelledby="stickyDeleteConfirmTitle"
+      aria-describedby="stickyDeleteConfirmDesc">
+      <div class="modal-header">
+        <h2 id="stickyDeleteConfirmTitle">删除便签</h2>
+        <button class="modal-close" id="closeStickyDeleteConfirm" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint" id="stickyDeleteConfirmDesc">确定删除这条便签吗？此操作无法撤销。</p>
+        <label class="form-field form-field-row confirm-skip-row">
+          <input type="checkbox" id="stickyDeleteSkipConfirm">
+          <span>不再提示</span>
+        </label>
+        <div class="modal-actions modal-actions-end">
+          <button type="button" class="btn btn-ghost" id="stickyDeleteCancelBtn">取消</button>
+          <button type="button" class="btn btn-ghost task-modal-delete" id="stickyDeleteConfirmBtn">删除</button>
         </div>
       </div>
     </div>

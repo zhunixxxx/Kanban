@@ -4,6 +4,9 @@ const SHOW_DONE_KEY = 'daily-kanban-show-done';
 const THEME_KEY = 'daily-kanban-theme';
 const WEATHER_CACHE_KEY = 'daily-kanban-weather';
 const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000;
+const STICKY_NOTES_KEY = 'daily-kanban-sticky-notes';
+const STICKY_PANEL_STATE_KEY = 'daily-kanban-sticky-panel';
+const STICKY_SKIP_DELETE_CONFIRM_KEY = 'daily-kanban-sticky-skip-delete-confirm';
 const DEFAULT_COORDS = { lat: 39.9042, lon: 116.4074 };
 
 const QUADRANTS = ['q1', 'q2', 'q3', 'q4'];
@@ -25,9 +28,15 @@ const GROUP_COLORS = [
 ];
 const MAX_GROUP_NAME_LENGTH = 20;
 const MAX_NOTES_LENGTH = 500;
+const MAX_STICKY_CONTENT = 2000;
+const STICKY_EDGES = ['right', 'left', 'top', 'bottom'];
 
 let tasks = [];
 let groups = [];
+let stickyNotes = [];
+let stickyPanelState = { collapsed: false, edge: 'right', offset: 0.5 };
+let skipStickyDeleteConfirm = false;
+let pendingStickyDeleteId = null;
 let draggedId = null;
 let suppressCardClick = false;
 let editingTaskId = null;
@@ -191,10 +200,12 @@ function bindThemeMenu() {
 function init() {
   initTheme();
   loadData();
+  loadStickyNotes();
   showDoneToggle.checked = showCompleted;
   renderDate();
   loadWeather();
   render();
+  initStickyNotes();
   bindEvents();
 }
 
@@ -664,7 +675,13 @@ function closeGroupModalFn() {
 }
 
 function updateBodyModalClass() {
-  if (!groupModal.hidden || !taskModal.hidden || !dataModal.hidden) {
+  if (
+    !groupModal.hidden
+    || !taskModal.hidden
+    || !dataModal.hidden
+    || !stickyNotesModal.hidden
+    || !stickyDeleteConfirmModal.hidden
+  ) {
     document.body.classList.add('modal-open');
   } else {
     document.body.classList.remove('modal-open');
@@ -672,9 +689,11 @@ function updateBodyModalClass() {
 }
 
 function closeTopModal() {
-  if (!taskModal.hidden) closeTaskModalFn();
+  if (!stickyDeleteConfirmModal.hidden) closeStickyDeleteConfirmFn();
+  else if (!taskModal.hidden) closeTaskModalFn();
   else if (!dataModal.hidden) closeDataModalFn();
   else if (!groupModal.hidden) closeGroupModalFn();
+  else if (!stickyNotesModal.hidden) closeStickyNotesModalFn();
 }
 
 function openDataModal() {
@@ -1013,10 +1032,12 @@ function clearDoneTasks() {
 
 function exportTasks() {
   const data = {
-    version: 3,
+    version: 4,
     exportedAt: new Date().toISOString(),
     groups,
     tasks,
+    stickyNotes,
+    stickyPanelState,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1037,6 +1058,8 @@ function parseImportData(raw) {
   return {
     tasks: list.map(normalizeTaskFields).filter(Boolean),
     groups: importedGroups,
+    stickyNotes: normalizeImportedStickyNotes(data?.stickyNotes),
+    stickyPanelState: normalizeStickyPanelState(data?.stickyPanelState),
   };
 }
 
@@ -1047,25 +1070,51 @@ function mergeGroups(existing, imported) {
 }
 
 function applyImport(imported) {
-  const { tasks: importedTasks, groups: importedGroups } = imported;
+  const { tasks: importedTasks, groups: importedGroups, stickyNotes: importedStickyNotes, stickyPanelState: importedPanelState } = imported;
 
   if (tasks.length === 0 && groups.length === 0) {
     tasks = importedTasks;
     groups = importedGroups;
+    if (importedStickyNotes?.length) {
+      stickyNotes = importedStickyNotes;
+      saveStickyNotes();
+    }
+    if (importedPanelState) {
+      stickyPanelState = importedPanelState;
+      saveStickyPanelState();
+      applyStickyPanelState();
+    }
   } else if (confirm(`覆盖现有 ${tasks.length} 个任务、${groups.length} 个分组，导入 ${importedTasks.length} 个任务、${importedGroups.length} 个分组？\n\n确定 = 覆盖\n取消 = 进入合并模式`)) {
     tasks = importedTasks;
     groups = importedGroups;
+    if (importedStickyNotes?.length) {
+      stickyNotes = importedStickyNotes;
+      saveStickyNotes();
+    }
+    if (importedPanelState) {
+      stickyPanelState = importedPanelState;
+      saveStickyPanelState();
+      applyStickyPanelState();
+    }
   } else if (confirm(`合并导入？\n相同 ID 的任务以导入文件为准，分组会合并去重。`)) {
     const map = new Map(tasks.map(t => [t.id, t]));
     importedTasks.forEach(t => map.set(t.id, t));
     tasks = [...map.values()];
     groups = mergeGroups(groups, importedGroups);
+    if (importedStickyNotes?.length) {
+      const stickyMap = new Map(stickyNotes.map(n => [n.id, n]));
+      importedStickyNotes.forEach(n => stickyMap.set(n.id, n));
+      stickyNotes = [...stickyMap.values()];
+      saveStickyNotes();
+    }
   } else {
     return false;
   }
 
   saveTasks();
   saveGroups();
+  renderStickyNotesList();
+  renderStickyModalGrid();
   render();
   return true;
 }
@@ -1512,6 +1561,462 @@ function bindCardEvents() {
   });
   bindQuickAddEvents();
   bindQuadrantInlineAddEvents();
+}
+
+const stickyNotesWrap = document.getElementById('stickyNotesWrap');
+const stickyNotesList = document.getElementById('stickyNotesList');
+const stickyNotesTab = document.getElementById('stickyNotesTab');
+const stickyAddBtn = document.getElementById('stickyAddBtn');
+const stickyCollapseBtn = document.getElementById('stickyCollapseBtn');
+const stickyNotesModal = document.getElementById('stickyNotesModal');
+const closeStickyNotesModalBtn = document.getElementById('closeStickyNotesModal');
+const stickyModalAddBtn = document.getElementById('stickyModalAddBtn');
+const stickyModalGrid = document.getElementById('stickyModalGrid');
+const stickyModalCount = document.getElementById('stickyModalCount');
+const stickyDeleteConfirmModal = document.getElementById('stickyDeleteConfirmModal');
+const closeStickyDeleteConfirmBtn = document.getElementById('closeStickyDeleteConfirm');
+const stickyDeleteSkipConfirm = document.getElementById('stickyDeleteSkipConfirm');
+const stickyDeleteCancelBtn = document.getElementById('stickyDeleteCancelBtn');
+const stickyDeleteConfirmBtn = document.getElementById('stickyDeleteConfirmBtn');
+
+let stickySaveTimer = null;
+let stickyTabDragState = null;
+let suppressStickyTabClick = false;
+let stickyTabClickTimer = null;
+
+function normalizeStickyPanelState(state) {
+  const edge = STICKY_EDGES.includes(state?.edge) ? state.edge : 'right';
+  const offset = typeof state?.offset === 'number' && state.offset >= 0 && state.offset <= 1
+    ? state.offset
+    : 0.5;
+  return {
+    collapsed: Boolean(state?.collapsed),
+    edge,
+    offset,
+  };
+}
+
+function normalizeImportedStickyNotes(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((item, index) => {
+      const content = String(item?.content ?? '').slice(0, MAX_STICKY_CONTENT);
+      const id = item?.id || generateId();
+      const createdAt = item?.createdAt || new Date().toISOString();
+      const updatedAt = item?.updatedAt || createdAt;
+      if (!content && !item?.id) return null;
+      return { id, content, createdAt, updatedAt };
+    })
+    .filter(Boolean);
+}
+
+function createStickyNote(content = '') {
+  const now = new Date().toISOString();
+  return {
+    id: generateId(),
+    content: String(content).slice(0, MAX_STICKY_CONTENT),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function loadStickyNotes() {
+  try {
+    skipStickyDeleteConfirm = localStorage.getItem(STICKY_SKIP_DELETE_CONFIRM_KEY) === 'true';
+  } catch {
+    skipStickyDeleteConfirm = false;
+  }
+
+  try {
+    const rawNotes = localStorage.getItem(STICKY_NOTES_KEY);
+    stickyNotes = normalizeImportedStickyNotes(rawNotes ? JSON.parse(rawNotes) : []);
+  } catch {
+    stickyNotes = [];
+  }
+
+  try {
+    const rawState = localStorage.getItem(STICKY_PANEL_STATE_KEY);
+    stickyPanelState = normalizeStickyPanelState(rawState ? JSON.parse(rawState) : {});
+  } catch {
+    stickyPanelState = normalizeStickyPanelState({});
+  }
+}
+
+function saveStickyNotes() {
+  localStorage.setItem(STICKY_NOTES_KEY, JSON.stringify(stickyNotes));
+}
+
+function saveStickyPanelState() {
+  localStorage.setItem(STICKY_PANEL_STATE_KEY, JSON.stringify(stickyPanelState));
+}
+
+function formatStickyTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function applyStickyPanelState() {
+  if (!stickyNotesWrap) return;
+  stickyNotesWrap.dataset.edge = stickyPanelState.edge;
+  stickyNotesWrap.dataset.collapsed = stickyPanelState.collapsed ? 'true' : 'false';
+  stickyNotesWrap.style.setProperty('--sticky-offset', `${stickyPanelState.offset * 100}%`);
+  if (stickyNotesTab) {
+    stickyNotesTab.hidden = !stickyPanelState.collapsed;
+  }
+}
+
+function setStickyPanelCollapsed(collapsed) {
+  stickyPanelState.collapsed = collapsed;
+  saveStickyPanelState();
+  applyStickyPanelState();
+}
+
+function setStickyPanelEdge(edge, offset) {
+  stickyPanelState.edge = STICKY_EDGES.includes(edge) ? edge : stickyPanelState.edge;
+  if (typeof offset === 'number') {
+    stickyPanelState.offset = Math.min(1, Math.max(0, offset));
+  }
+  saveStickyPanelState();
+  applyStickyPanelState();
+}
+
+function getNearestStickyEdge(x, y) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const distances = [
+    { edge: 'top', dist: y },
+    { edge: 'bottom', dist: h - y },
+    { edge: 'left', dist: x },
+    { edge: 'right', dist: w - x },
+  ];
+  distances.sort((a, b) => a.dist - b.dist);
+  return distances[0].edge;
+}
+
+function getStickyTabRect() {
+  if (!stickyNotesTab) return null;
+  return stickyNotesTab.getBoundingClientRect();
+}
+
+function getStickyOffsetForPoint(edge, x, y) {
+  const rect = getStickyTabRect();
+  const tabWidth = rect?.width || 48;
+  const tabHeight = rect?.height || 48;
+  const margin = 8;
+
+  if (edge === 'top' || edge === 'bottom') {
+    const w = window.innerWidth;
+    const min = margin + tabWidth / 2;
+    const max = w - margin - tabWidth / 2;
+    const ratio = (x - min) / Math.max(max - min, 1);
+    return Math.min(1, Math.max(0, ratio));
+  }
+
+  const h = window.innerHeight;
+  const min = margin + tabHeight / 2;
+  const max = h - margin - tabHeight / 2;
+  const ratio = (y - min) / Math.max(max - min, 1);
+  return Math.min(1, Math.max(0, ratio));
+}
+
+function updateStickyTabDragPosition(clientX, clientY, grabOffsetX, grabOffsetY) {
+  stickyNotesWrap.classList.add('is-tab-free');
+  stickyNotesWrap.style.setProperty('--tab-x', `${clientX - grabOffsetX}px`);
+  stickyNotesWrap.style.setProperty('--tab-y', `${clientY - grabOffsetY}px`);
+}
+
+function snapStickyTabToEdge(clientX, clientY) {
+  const rect = getStickyTabRect();
+  const cx = rect ? rect.left + rect.width / 2 : clientX;
+  const cy = rect ? rect.top + rect.height / 2 : clientY;
+  const edge = getNearestStickyEdge(cx, cy);
+  const offset = getStickyOffsetForPoint(edge, cx, cy);
+  setStickyPanelEdge(edge, offset);
+  stickyNotesWrap.classList.remove('is-tab-free');
+  stickyNotesWrap.style.removeProperty('--tab-x');
+  stickyNotesWrap.style.removeProperty('--tab-y');
+}
+
+function scheduleStickySave() {
+  clearTimeout(stickySaveTimer);
+  stickySaveTimer = setTimeout(() => saveStickyNotes(), 300);
+}
+
+function addStickyNote(content = '') {
+  const note = createStickyNote(content);
+  stickyNotes.unshift(note);
+  saveStickyNotes();
+  renderStickyNotesList();
+  renderStickyModalGrid();
+  return note;
+}
+
+function updateStickyNoteContent(id, content) {
+  const note = stickyNotes.find(n => n.id === id);
+  if (!note) return;
+  note.content = String(content).slice(0, MAX_STICKY_CONTENT);
+  note.updatedAt = new Date().toISOString();
+  scheduleStickySave();
+  syncStickyNoteViews(id);
+}
+
+function deleteStickyNote(id) {
+  stickyNotes = stickyNotes.filter(n => n.id !== id);
+  saveStickyNotes();
+  renderStickyNotesList();
+  renderStickyModalGrid();
+}
+
+function setSkipStickyDeleteConfirm(skip) {
+  skipStickyDeleteConfirm = skip;
+  try {
+    if (skip) localStorage.setItem(STICKY_SKIP_DELETE_CONFIRM_KEY, 'true');
+    else localStorage.removeItem(STICKY_SKIP_DELETE_CONFIRM_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function openStickyDeleteConfirm(id) {
+  if (!stickyDeleteConfirmModal) return;
+  pendingStickyDeleteId = id;
+  if (stickyDeleteSkipConfirm) stickyDeleteSkipConfirm.checked = false;
+  stickyDeleteConfirmModal.hidden = false;
+  stickyDeleteConfirmModal.classList.add('modal-overlay-top');
+  updateBodyModalClass();
+  stickyDeleteConfirmBtn?.focus();
+}
+
+function closeStickyDeleteConfirmFn() {
+  if (!stickyDeleteConfirmModal) return;
+  pendingStickyDeleteId = null;
+  stickyDeleteConfirmModal.hidden = true;
+  stickyDeleteConfirmModal.classList.remove('modal-overlay-top');
+  updateBodyModalClass();
+}
+
+function confirmDeleteStickyNote() {
+  if (stickyDeleteSkipConfirm?.checked) {
+    setSkipStickyDeleteConfirm(true);
+  }
+  const id = pendingStickyDeleteId;
+  closeStickyDeleteConfirmFn();
+  if (id) deleteStickyNote(id);
+}
+
+function requestDeleteStickyNote(id) {
+  if (skipStickyDeleteConfirm) {
+    deleteStickyNote(id);
+    return;
+  }
+  openStickyDeleteConfirm(id);
+}
+
+function renderStickyNoteCard(note, context) {
+  const meta = note.updatedAt !== note.createdAt
+    ? formatStickyTime(note.updatedAt)
+    : formatStickyTime(note.createdAt);
+  return `
+    <div class="sticky-note-card" data-id="${note.id}" data-context="${context}">
+      <button type="button" class="sticky-note-delete" data-action="delete-sticky" title="删除便签" aria-label="删除便签">×</button>
+      <textarea class="sticky-note-textarea" data-id="${note.id}" maxlength="${MAX_STICKY_CONTENT}" placeholder="写点什么…">${escapeHtml(note.content)}</textarea>
+      <div class="sticky-note-meta">${meta ? escapeHtml(meta) : ''}</div>
+    </div>
+  `;
+}
+
+function renderStickyNotesList() {
+  if (!stickyNotesList) return;
+  if (stickyNotes.length === 0) {
+    stickyNotesList.innerHTML = '<p class="sticky-notes-empty">暂无便签<br>点击右上角 + 新建</p>';
+    return;
+  }
+  stickyNotesList.innerHTML = stickyNotes.map(n => renderStickyNoteCard(n, 'panel')).join('');
+  bindStickyNoteEvents(stickyNotesList);
+}
+
+function renderStickyModalGrid() {
+  if (!stickyModalGrid) return;
+  stickyModalCount.textContent = stickyNotes.length ? `共 ${stickyNotes.length} 条` : '';
+  if (stickyNotes.length === 0) {
+    stickyModalGrid.innerHTML = '<p class="sticky-notes-empty">还没有便签，点击上方按钮新建</p>';
+    return;
+  }
+  stickyModalGrid.innerHTML = stickyNotes.map(n => renderStickyNoteCard(n, 'modal')).join('');
+  bindStickyNoteEvents(stickyModalGrid);
+}
+
+function syncStickyNoteViews(id) {
+  const note = stickyNotes.find(n => n.id === id);
+  if (!note) return;
+  const meta = note.updatedAt !== note.createdAt
+    ? formatStickyTime(note.updatedAt)
+    : formatStickyTime(note.createdAt);
+  document.querySelectorAll(`.sticky-note-card[data-id="${id}"]`).forEach(card => {
+    const metaEl = card.querySelector('.sticky-note-meta');
+    if (metaEl) metaEl.textContent = meta;
+  });
+}
+
+function bindStickyNoteEvents(container) {
+  container.querySelectorAll('.sticky-note-textarea').forEach(textarea => {
+    textarea.addEventListener('input', () => {
+      updateStickyNoteContent(textarea.dataset.id, textarea.value);
+    });
+  });
+  container.querySelectorAll('[data-action="delete-sticky"]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const card = btn.closest('.sticky-note-card');
+      if (card) requestDeleteStickyNote(card.dataset.id);
+    });
+  });
+}
+
+function openStickyNotesModalFn() {
+  if (!stickyNotesModal) return;
+  renderStickyModalGrid();
+  stickyNotesModal.hidden = false;
+  updateBodyModalClass();
+}
+
+function closeStickyNotesModalFn() {
+  if (!stickyNotesModal) return;
+  stickyNotesModal.hidden = true;
+  updateBodyModalClass();
+}
+
+function bindStickyTabDrag() {
+  if (!stickyNotesTab || !stickyNotesWrap) return;
+
+  stickyNotesTab.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    const rect = stickyNotesTab.getBoundingClientRect();
+    stickyTabDragState = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      grabOffsetX: e.clientX - rect.left,
+      grabOffsetY: e.clientY - rect.top,
+      moved: false,
+    };
+    stickyNotesTab.setPointerCapture(e.pointerId);
+  });
+
+  stickyNotesTab.addEventListener('pointermove', e => {
+    if (!stickyTabDragState || stickyTabDragState.pointerId !== e.pointerId) return;
+    const dx = e.clientX - stickyTabDragState.startX;
+    const dy = e.clientY - stickyTabDragState.startY;
+    if (!stickyTabDragState.moved && Math.hypot(dx, dy) < 6) return;
+
+    stickyTabDragState.moved = true;
+    updateStickyTabDragPosition(
+      e.clientX,
+      e.clientY,
+      stickyTabDragState.grabOffsetX,
+      stickyTabDragState.grabOffsetY,
+    );
+    stickyNotesTab.classList.add('is-dragging');
+  });
+
+  stickyNotesTab.addEventListener('pointerup', e => {
+    if (!stickyTabDragState || stickyTabDragState.pointerId !== e.pointerId) return;
+    const { moved } = stickyTabDragState;
+    stickyTabDragState = null;
+    stickyNotesTab.classList.remove('is-dragging');
+
+    try {
+      stickyNotesTab.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+
+    if (moved) {
+      suppressStickyTabClick = true;
+      setTimeout(() => { suppressStickyTabClick = false; }, 300);
+      snapStickyTabToEdge(e.clientX, e.clientY);
+      return;
+    }
+
+    stickyNotesWrap.classList.remove('is-tab-free');
+    stickyNotesWrap.style.removeProperty('--tab-x');
+    stickyNotesWrap.style.removeProperty('--tab-y');
+
+    if (stickyTabClickTimer) {
+      clearTimeout(stickyTabClickTimer);
+      stickyTabClickTimer = null;
+      return;
+    }
+
+    stickyTabClickTimer = setTimeout(() => {
+      stickyTabClickTimer = null;
+      setStickyPanelCollapsed(false);
+    }, 280);
+  });
+
+  stickyNotesTab.addEventListener('pointercancel', () => {
+    stickyTabDragState = null;
+    stickyNotesTab.classList.remove('is-dragging');
+    stickyNotesWrap.classList.remove('is-tab-free');
+    stickyNotesWrap.style.removeProperty('--tab-x');
+    stickyNotesWrap.style.removeProperty('--tab-y');
+  });
+
+  stickyNotesTab.addEventListener('dblclick', e => {
+    e.preventDefault();
+    if (stickyTabClickTimer) {
+      clearTimeout(stickyTabClickTimer);
+      stickyTabClickTimer = null;
+    }
+    suppressStickyTabClick = true;
+    setTimeout(() => { suppressStickyTabClick = false; }, 300);
+    openStickyNotesModalFn();
+  });
+
+  stickyNotesTab.addEventListener('click', e => {
+    if (suppressStickyTabClick) {
+      e.preventDefault();
+    }
+  });
+}
+
+function initStickyNotes() {
+  if (!stickyNotesWrap) return;
+
+  applyStickyPanelState();
+  renderStickyNotesList();
+
+  stickyAddBtn?.addEventListener('click', () => {
+    const note = addStickyNote('');
+    const textarea = stickyNotesList?.querySelector(`.sticky-note-textarea[data-id="${note.id}"]`);
+    textarea?.focus();
+  });
+
+  stickyCollapseBtn?.addEventListener('click', () => {
+    setStickyPanelCollapsed(true);
+  });
+
+  stickyModalAddBtn?.addEventListener('click', () => {
+    const note = addStickyNote('');
+    const textarea = stickyModalGrid?.querySelector(`.sticky-note-textarea[data-id="${note.id}"]`);
+    textarea?.focus();
+  });
+
+  closeStickyNotesModalBtn?.addEventListener('click', closeStickyNotesModalFn);
+  stickyNotesModal?.addEventListener('click', e => {
+    if (e.target === stickyNotesModal) closeStickyNotesModalFn();
+  });
+
+  closeStickyDeleteConfirmBtn?.addEventListener('click', closeStickyDeleteConfirmFn);
+  stickyDeleteCancelBtn?.addEventListener('click', closeStickyDeleteConfirmFn);
+  stickyDeleteConfirmBtn?.addEventListener('click', confirmDeleteStickyNote);
+  stickyDeleteConfirmModal?.addEventListener('click', e => {
+    if (e.target === stickyDeleteConfirmModal) closeStickyDeleteConfirmFn();
+  });
+
+  bindStickyTabDrag();
 }
 
 init();
