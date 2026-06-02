@@ -1,6 +1,7 @@
 const TASKS_KEY = 'daily-kanban-tasks';
 const GROUPS_KEY = 'daily-kanban-groups';
 const SHOW_DONE_KEY = 'daily-kanban-show-done';
+const THEME_KEY = 'daily-kanban-theme';
 const WEATHER_CACHE_KEY = 'daily-kanban-weather';
 const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_COORDS = { lat: 39.9042, lon: 116.4074 };
@@ -53,6 +54,20 @@ const importFile = document.getElementById('importFile');
 const showDoneToggle = document.getElementById('showDoneToggle');
 const currentDateEl = document.getElementById('currentDate');
 const currentWeatherEl = document.getElementById('currentWeather');
+const themeMenuBtn = document.getElementById('themeMenuBtn');
+const themeMenu = document.getElementById('themeMenu');
+
+const THEMES = ['light', 'dark', 'pink', 'taro', 'baby', 'velvet', 'forest'];
+const THEME_LABELS = {
+  light: '浅色',
+  dark: '暗色',
+  pink: '少女粉',
+  taro: '香芋紫',
+  baby: '婴儿蓝',
+  velvet: '鹅绒黄',
+  forest: '森林绿',
+};
+const THEME_LEGACY = { sand: 'pink' };
 const progressRing = document.getElementById('progressRing');
 const progressFill = document.getElementById('progressFill');
 const progressBar = document.getElementById('progressBar');
@@ -75,7 +90,106 @@ const taskModalCompletedField = document.getElementById('taskModalCompletedField
 const taskModalDelete = document.getElementById('taskModalDelete');
 const taskModalSave = document.getElementById('taskModalSave');
 
+function normalizeTheme(theme) {
+  const mapped = THEME_LEGACY[theme] || theme;
+  return THEMES.includes(mapped) ? mapped : 'light';
+}
+
+function getPreferredTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    const theme = normalizeTheme(stored);
+    if (stored && theme !== stored) {
+      localStorage.setItem(THEME_KEY, theme);
+    }
+    if (THEMES.includes(theme)) return theme;
+  } catch {
+    /* ignore */
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function renderThemeMenu() {
+  if (!themeMenu) return;
+  themeMenu.innerHTML = THEMES.map(id => (
+    `<button type="button" class="theme-option" data-theme="${id}" role="option">${THEME_LABELS[id]}</button>`
+  )).join('');
+}
+
+function getActiveTheme() {
+  return normalizeTheme(document.documentElement.getAttribute('data-theme'));
+}
+
+function closeThemeMenu() {
+  if (!themeMenu || !themeMenuBtn) return;
+  themeMenu.hidden = true;
+  themeMenuBtn.setAttribute('aria-expanded', 'false');
+}
+
+function openThemeMenu() {
+  if (!themeMenu || !themeMenuBtn) return;
+  themeMenu.hidden = false;
+  themeMenuBtn.setAttribute('aria-expanded', 'true');
+}
+
+function updateThemeMenuUI(theme) {
+  if (!themeMenu) return;
+  const next = normalizeTheme(theme);
+  themeMenu.querySelectorAll('.theme-option').forEach(btn => {
+    const active = btn.dataset.theme === next;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  if (themeMenuBtn) {
+    themeMenuBtn.title = `当前：${THEME_LABELS[next]}`;
+  }
+}
+
+function applyTheme(theme) {
+  const next = normalizeTheme(theme);
+  document.documentElement.setAttribute('data-theme', next);
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    /* ignore */
+  }
+  updateThemeMenuUI(next);
+}
+
+function initTheme() {
+  renderThemeMenu();
+  applyTheme(getPreferredTheme());
+}
+
+function bindThemeMenu() {
+  if (!themeMenuBtn || !themeMenu) return;
+
+  themeMenuBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (themeMenu.hidden) openThemeMenu();
+    else closeThemeMenu();
+  });
+
+  themeMenu.querySelectorAll('.theme-option').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      applyTheme(btn.dataset.theme);
+      closeThemeMenu();
+    });
+  });
+
+  document.addEventListener('click', e => {
+    if (themeMenu.hidden || e.target.closest('.theme-picker')) return;
+    closeThemeMenu();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeThemeMenu();
+  });
+}
+
 function init() {
+  initTheme();
   loadData();
   showDoneToggle.checked = showCompleted;
   renderDate();
@@ -1238,6 +1352,8 @@ function escapeHtml(str) {
 }
 
 function bindEvents() {
+  bindThemeMenu();
+
   taskInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') addTaskQuick();
   });
