@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>zhunix's workspace</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-left">
+        <h1 class="title">zhunix's workspace</h1>
+        <p class="header-meta">
+          <span class="date" id="currentDate"></span>
+          <span class="header-meta-sep" aria-hidden="true">·</span>
+          <span class="weather is-loading" id="currentWeather" aria-live="polite">天气加载中…</span>
+        </p>
+      </div>
+      <div class="header-right">
+        <button class="btn btn-ghost" id="editGroupsBtn" title="管理分组">分组管理</button>
+        <button class="btn btn-ghost" id="dataBtn" title="导入与导出">数据备份</button>
+        <button class="btn btn-ghost" id="clearDoneBtn" title="清除已完成">清除已完成</button>
+      </div>
+    </header>
+
+    <section class="status-bar">
+      <div class="status-progress">
+        <div class="progress-ring" id="progressRing" aria-hidden="true">
+          <span class="progress-ring-value" id="statusPercent">0%</span>
+        </div>
+        <div class="progress-detail">
+          <span class="progress-label">待办完成度</span>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="progressBar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <span class="progress-meta" id="statusMeta">待办 0 · 已完成 0</span>
+        </div>
+      </div>
+      <label class="toggle-done status-toggle">
+        <input type="checkbox" id="showDoneToggle">
+        <span>显示已完成</span>
+      </label>
+    </section>
+
+    <section class="add-task">
+      <div class="add-task-row">
+        <input type="text" id="taskInput" class="task-input" placeholder="快速添加任务，按 Enter 确认…" maxlength="200"
+          autocomplete="off">
+        <button type="button" class="btn btn-primary" id="addTaskQuickBtn" title="将上方内容快速添加为任务">快速添加</button>
+        <button type="button" class="btn btn-ghost" id="addTaskDetailBtn" title="填写分组、重要程度、备注">详细添加</button>
+      </div>
+      <p class="quick-add-hint" id="quickAddHint" hidden></p>
+    </section>
+
+    <section class="today-section">
+      <div class="today-header">
+        <h2 class="today-title">今日TODO</h2>
+        <span class="today-count" id="todayCount">0</span>
+      </div>
+      <ol class="today-list" id="todayList"></ol>
+    </section>
+    <main class="matrix" id="matrix">
+      <div class="quadrant" data-quadrant="q1">
+        <div class="quadrant-header">
+          <div class="quadrant-title-row">
+            <h2>重要且紧急</h2>
+            <span class="quadrant-count" data-count="q1">0</span>
+          </div>
+          <p class="quadrant-hint">立即处理</p>
+        </div>
+        <ul class="task-list" id="q1List" data-quadrant="q1"></ul>
+      </div>
+
+      <div class="quadrant" data-quadrant="q3">
+        <div class="quadrant-header">
+          <div class="quadrant-title-row">
+            <h2>重要不紧急</h2>
+            <span class="quadrant-count" data-count="q3">0</span>
+          </div>
+          <p class="quadrant-hint">计划安排，持续投入</p>
+        </div>
+        <ul class="task-list" id="q3List" data-quadrant="q3"></ul>
+      </div>
+
+      <div class="quadrant" data-quadrant="q2">
+        <div class="quadrant-header">
+          <div class="quadrant-title-row">
+            <h2>紧急不重要</h2>
+            <span class="quadrant-count" data-count="q2">0</span>
+          </div>
+          <p class="quadrant-hint">尽量委派或快速处理</p>
+        </div>
+        <ul class="task-list" id="q2List" data-quadrant="q2"></ul>
+      </div>
+
+      <div class="quadrant" data-quadrant="q4">
+        <div class="quadrant-header">
+          <div class="quadrant-title-row">
+            <h2>不重要不紧急</h2>
+            <span class="quadrant-count" data-count="q4">0</span>
+          </div>
+          <p class="quadrant-hint">减少或删除</p>
+        </div>
+        <ul class="task-list" id="q4List" data-quadrant="q4"></ul>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>拖拽任务可在象限间移动 · 点击任务查看详情 · 快速添加或详细添加新任务</span>
+    </footer>
+  </div>
+
+  <div class="modal-overlay" id="groupModal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="groupModalTitle">
+      <div class="modal-header">
+        <h2 id="groupModalTitle">分组管理</h2>
+        <button class="modal-close" id="closeGroupModal" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-group-add">
+          <input type="text" id="groupInput" class="group-input" maxlength="20" placeholder="分组名" title="编辑分组名">
+          <button class="btn btn-primary btn-sm" id="addGroupBtn">添加分组</button>
+        </div>
+        <ul class="modal-groups-list" id="modalGroupsList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="taskModal" hidden>
+    <div class="modal modal-task" role="dialog" aria-labelledby="taskModalHeading">
+      <div class="modal-header">
+        <h2 id="taskModalHeading">任务详情</h2>
+        <button class="modal-close" id="closeTaskModal" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="form-field">
+          <span class="form-label">标题</span>
+          <input type="text" id="taskModalTitle" class="form-input" maxlength="200">
+        </label>
+        <label class="form-field">
+          <span class="form-label">分组</span>
+          <select id="taskModalGroup" class="form-select"></select>
+        </label>
+        <label class="form-field">
+          <span class="form-label">重要程度</span>
+          <select id="taskModalQuadrant" class="form-select">
+            <option value="q1">重要且紧急</option>
+            <option value="q2">紧急不重要</option>
+            <option value="q3">重要不紧急</option>
+            <option value="q4">不重要不紧急</option>
+          </select>
+        </label>
+        <div class="form-dates-row">
+          <label class="form-field">
+            <span class="form-label">开始日期</span>
+            <input type="date" id="taskModalStartDate" class="form-input">
+          </label>
+          <label class="form-field">
+            <span class="form-label">截止日期</span>
+            <input type="date" id="taskModalDueDate" class="form-input">
+          </label>
+        </div>
+        <label class="form-field">
+          <span class="form-label">备注</span>
+          <textarea id="taskModalNotes" class="form-textarea" rows="4" maxlength="500" placeholder="添加备注…"></textarea>
+        </label>
+        <label class="form-field form-field-row" id="taskModalCompletedField">
+          <input type="checkbox" id="taskModalCompleted">
+          <span>标记为已完成</span>
+        </label>
+        <p class="task-modal-meta" id="taskModalMeta"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost task-modal-delete" id="taskModalDelete">删除任务</button>
+          <button type="button" class="btn btn-primary" id="taskModalSave">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="dataModal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="dataModalTitle">
+      <div class="modal-header">
+        <h2 id="dataModalTitle">备份与恢复</h2>
+        <button class="modal-close" id="closeDataModal" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">将任务与分组导出为 JSON 文件，或从备份文件恢复。数据仅保存在本机浏览器。</p>
+        <div class="data-io-actions">
+          <button type="button" class="btn btn-primary data-io-btn" id="exportBtn">
+            <span class="data-io-label">导出备份</span>
+            <span class="data-io-desc">下载 JSON 文件到本地</span>
+          </button>
+          <button type="button" class="btn btn-ghost data-io-btn" id="importBtn">
+            <span class="data-io-label">导入备份</span>
+            <span class="data-io-desc">从 JSON 文件恢复数据</span>
+          </button>
+          <input type="file" id="importFile" accept=".json,application/json" hidden>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+
+</html>
