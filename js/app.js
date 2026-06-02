@@ -1,6 +1,8 @@
 const TASKS_KEY = 'daily-kanban-tasks';
 const GROUPS_KEY = 'daily-kanban-groups';
 const SHOW_DONE_KEY = 'daily-kanban-show-done';
+const LAST_GROUP_KEY = 'daily-kanban-last-group';
+const SKIP_GROUP_HINT_KEY = 'daily-kanban-skip-group-hint';
 const THEME_KEY = 'daily-kanban-theme';
 const WEATHER_CACHE_KEY = 'daily-kanban-weather';
 const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -42,6 +44,8 @@ let suppressCardClick = false;
 let editingTaskId = null;
 let isAddMode = false;
 let quickAddQuadrant = 'q3';
+let quickAddSkipGroup = false;
+let lastUsedGroup = '';
 let showCompleted = localStorage.getItem(SHOW_DONE_KEY) === 'true';
 
 const taskInput = document.getElementById('taskInput');
@@ -205,6 +209,7 @@ function init() {
   renderDate();
   loadWeather();
   render();
+  updateQuickAddHint();
   initStickyNotes();
   bindEvents();
 }
@@ -227,6 +232,72 @@ function loadData() {
   } catch {
     groups = [];
   }
+
+  loadLastUsedGroup();
+  loadQuickAddSkipGroup();
+}
+
+function loadQuickAddSkipGroup() {
+  try {
+    quickAddSkipGroup = localStorage.getItem(SKIP_GROUP_HINT_KEY) === 'true';
+  } catch {
+    quickAddSkipGroup = false;
+  }
+}
+
+function setQuickAddSkipGroup(skipped) {
+  quickAddSkipGroup = skipped;
+  try {
+    if (skipped) {
+      localStorage.setItem(SKIP_GROUP_HINT_KEY, 'true');
+    } else {
+      localStorage.removeItem(SKIP_GROUP_HINT_KEY);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadLastUsedGroup() {
+  try {
+    const stored = localStorage.getItem(LAST_GROUP_KEY);
+    const normalized = normalizeGroupChar(stored);
+    if (normalized && groups.some(g => g.char === normalized)) {
+      lastUsedGroup = normalized;
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  lastUsedGroup = '';
+}
+
+function rememberLastUsedGroup(char) {
+  const normalized = normalizeGroupChar(char);
+  if (!normalized || !groups.some(g => g.char === normalized)) return;
+  lastUsedGroup = normalized;
+  localStorage.setItem(LAST_GROUP_KEY, normalized);
+  updateQuickAddHint();
+}
+
+function clearLastUsedGroupIf(char) {
+  if (lastUsedGroup !== char) return;
+  lastUsedGroup = '';
+  localStorage.removeItem(LAST_GROUP_KEY);
+  updateQuickAddHint();
+}
+
+function getDefaultAddGroup() {
+  if (quickAddSkipGroup) return '';
+  if (lastUsedGroup && groups.some(g => g.char === lastUsedGroup)) {
+    return lastUsedGroup;
+  }
+  return '';
+}
+
+function skipQuickAddGroup() {
+  setQuickAddSkipGroup(true);
+  updateQuickAddHint();
 }
 
 function saveTasks() {
@@ -600,6 +671,13 @@ function syncModalDueToStart() {
   if (due < start) taskModalDueDate.value = start;
 }
 
+function syncModalStartToDue() {
+  const due = normalizeDateOnly(taskModalDueDate.value, todayDateOnly());
+  taskModalDueDate.value = due;
+  const start = normalizeDateOnly(taskModalStartDate.value, due);
+  if (start > due) taskModalStartDate.value = due;
+}
+
 function getTaskStartDate(task) {
   return task.startDate || toDateOnly(task.createdAt) || todayDateOnly();
 }
@@ -656,10 +734,27 @@ function sortByPriority(a, b) {
   return new Date(a.createdAt) - new Date(b.createdAt);
 }
 
+function sortTodayTasks(a, b) {
+  const aOverdue = isTaskOverdue(a);
+  const bOverdue = isTaskOverdue(b);
+  if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+  if (aOverdue && bOverdue) {
+    const dueCmp = getTaskDueDate(a).localeCompare(getTaskDueDate(b));
+    if (dueCmp !== 0) return dueCmp;
+  }
+  return sortByPriority(a, b);
+}
+
+function isTaskInTodayTodo(task) {
+  if (task.completed) return false;
+  if (isTaskOverdue(task)) return true;
+  return isTaskInTodayRange(task);
+}
+
 function getTodayTasks() {
   return tasks
-    .filter(t => !t.completed && isTaskInTodayRange(t))
-    .sort(sortByPriority);
+    .filter(isTaskInTodayTodo)
+    .sort(sortTodayTasks);
 }
 
 function openGroupModal() {
@@ -711,7 +806,8 @@ function openAddTaskModal(options = {}) {
   editingTaskId = null;
   taskModalHeading.textContent = '添加任务';
   taskModalTitle.value = options.title || '';
-  taskModalGroup.innerHTML = renderGroupOptions(options.group || '');
+  const defaultGroup = 'group' in options ? options.group : getDefaultAddGroup();
+  taskModalGroup.innerHTML = renderGroupOptions(defaultGroup);
   taskModalQuadrant.value = QUADRANTS.includes(options.quadrant) ? options.quadrant : quickAddQuadrant;
   taskModalNotes.value = options.notes || '';
   setTaskModalDates(todayDateOnly(), todayDateOnly());
@@ -785,8 +881,12 @@ function saveTaskFromModal() {
     : task.quadrant;
 
   const group = normalizeGroupChar(taskModalGroup.value);
-  if (group) task.group = group;
-  else delete task.group;
+  if (group) {
+    task.group = group;
+    rememberLastUsedGroup(group);
+  } else {
+    delete task.group;
+  }
 
   const notes = taskModalNotes.value.trim().slice(0, MAX_NOTES_LENGTH);
   if (notes) task.notes = notes;
@@ -826,23 +926,37 @@ function createTaskFromModal() {
     notes,
     dates,
   );
+  taskInput.value = '';
+  quickAddQuadrant = 'q3';
   closeTaskModalFn();
 }
 
-function setQuickAddContext(quadrant) {
-  quickAddQuadrant = QUADRANTS.includes(quadrant) ? quadrant : 'q3';
-  updateQuickAddHint();
-  taskInput.focus();
-}
-
 function updateQuickAddHint() {
-  if (quickAddQuadrant === 'q3') {
+  if (quickAddSkipGroup) {
     quickAddHint.hidden = true;
-    quickAddHint.textContent = '';
+    quickAddHint.innerHTML = '';
     return;
   }
+
+  const group = getDefaultAddGroup();
+  const showQuadrant = quickAddQuadrant !== 'q3';
+
+  if (!group && !showQuadrant) {
+    quickAddHint.hidden = true;
+    quickAddHint.innerHTML = '';
+    return;
+  }
+
   quickAddHint.hidden = false;
-  quickAddHint.textContent = `快速添加至：${QUADRANT_LABELS[quickAddQuadrant]}`;
+  const parts = [];
+  if (group) parts.push(renderGroupBadge(group));
+  if (showQuadrant) {
+    parts.push(`<span class="quick-add-hint-text">${escapeHtml(QUADRANT_LABELS[quickAddQuadrant])}</span>`);
+  }
+  const clearBtn = group
+    ? '<button type="button" class="quick-add-hint-clear" data-action="skip-quick-group" aria-label="本次不使用该分组" title="本次不使用该分组">×</button>'
+    : '';
+  quickAddHint.innerHTML = `${clearBtn}快速添加至 ${parts.join('<span class="quick-add-hint-sep">·</span>')}`;
 }
 
 function addTaskQuick() {
@@ -851,10 +965,9 @@ function addTaskQuick() {
     taskInput.focus();
     return;
   }
-  addTask(title, quickAddQuadrant, '');
+  addTask(title, quickAddQuadrant, getDefaultAddGroup());
   taskInput.value = '';
   quickAddQuadrant = 'q3';
-  updateQuickAddHint();
   taskInput.focus();
 }
 
@@ -886,6 +999,7 @@ function deleteGroup(char) {
   tasks.forEach(t => {
     if (t.group === char) delete t.group;
   });
+  clearLastUsedGroupIf(char);
   saveGroups();
   saveTasks();
   render();
@@ -989,6 +1103,11 @@ function addTask(title, quadrant, group, notes = '', dateOptions = {}) {
     startDate,
     dueDate,
   });
+
+  if (normalizedGroup) {
+    setQuickAddSkipGroup(false);
+    rememberLastUsedGroup(normalizedGroup);
+  }
 
   saveTasks();
   render();
@@ -1249,14 +1368,6 @@ function addTaskFromQuadrantInput(quadrant, inputEl) {
   closeQuadrantInlineAdd(inputEl.closest('.quadrant-inline-add'), true);
 }
 
-function renderTodayQuickAdd() {
-  return `
-    <li class="list-quick-add today-quick-add">
-      <button type="button" class="list-quick-add-btn" data-action="quick-add">+ 添加新任务</button>
-    </li>
-  `;
-}
-
 function renderGroupSelects() {
   /* 分组选项在打开任务弹窗时填充 */
 }
@@ -1345,15 +1456,9 @@ function renderStatusBar() {
 function renderTodayTodo() {
   const todayTasks = getTodayTasks();
   todayCount.textContent = todayTasks.length;
-
-  if (todayTasks.length === 0) {
-    todayList.innerHTML = renderTodayQuickAdd();
-    return;
-  }
-
   todayList.innerHTML = todayTasks
     .map((task, i) => renderTodayItem(task, i + 1))
-    .join('') + renderTodayQuickAdd();
+    .join('');
 }
 
 function render() {
@@ -1408,7 +1513,15 @@ function bindEvents() {
   });
 
   addTaskQuickBtn.addEventListener('click', addTaskQuick);
-  addTaskDetailBtn.addEventListener('click', () => openAddTaskModal({ quadrant: quickAddQuadrant }));
+  addTaskDetailBtn.addEventListener('click', () => {
+    openAddTaskModal({ title: taskInput.value, quadrant: quickAddQuadrant });
+  });
+  quickAddHint.addEventListener('click', e => {
+    if (e.target.closest('[data-action="skip-quick-group"]')) {
+      e.preventDefault();
+      skipQuickAddGroup();
+    }
+  });
 
   editGroupsBtn.addEventListener('click', openGroupModal);
   document.addEventListener('click', e => {
@@ -1433,6 +1546,8 @@ function bindEvents() {
   taskModalSave.addEventListener('click', saveTaskFromModal);
   taskModalStartDate.addEventListener('change', syncModalDueToStart);
   taskModalStartDate.addEventListener('input', syncModalDueToStart);
+  taskModalDueDate.addEventListener('change', syncModalStartToDue);
+  taskModalDueDate.addEventListener('input', syncModalStartToDue);
   taskModalDelete.addEventListener('click', () => {
     if (!editingTaskId) return;
     if (!confirm('确定删除这个任务吗？')) return;
@@ -1476,14 +1591,6 @@ function bindEvents() {
       list.classList.remove('drag-over');
       if (draggedId) moveTask(draggedId, q);
       draggedId = null;
-    });
-  });
-}
-
-function bindQuickAddEvents() {
-  document.querySelectorAll('[data-action="quick-add"]').forEach(el => {
-    el.addEventListener('click', () => {
-      setQuickAddContext(el.dataset.quadrant || 'q3');
     });
   });
 }
@@ -1559,7 +1666,6 @@ function bindCardEvents() {
       if (btn.dataset.action === 'delete') deleteTask(btn.dataset.id);
     });
   });
-  bindQuickAddEvents();
   bindQuadrantInlineAddEvents();
 }
 
@@ -1657,6 +1763,14 @@ function formatStickyTime(iso) {
   return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function syncStickyPanelBootstrapAttrs() {
+  const root = document.documentElement;
+  root.setAttribute('data-sticky-collapsed', stickyPanelState.collapsed ? 'true' : 'false');
+  root.setAttribute('data-sticky-edge', stickyPanelState.edge);
+  root.style.setProperty('--sticky-panel-offset', `${stickyPanelState.offset * 100}%`);
+  root.setAttribute('data-sticky-ready', 'true');
+}
+
 function applyStickyPanelState() {
   if (!stickyNotesWrap) return;
   stickyNotesWrap.dataset.edge = stickyPanelState.edge;
@@ -1665,6 +1779,7 @@ function applyStickyPanelState() {
   if (stickyNotesTab) {
     stickyNotesTab.hidden = !stickyPanelState.collapsed;
   }
+  syncStickyPanelBootstrapAttrs();
 }
 
 function setStickyPanelCollapsed(collapsed) {

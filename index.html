@@ -22,6 +22,25 @@
         document.documentElement.setAttribute('data-theme', 'light');
       }
     })();
+    (function () {
+      var EDGES = ['right', 'left', 'top', 'bottom'];
+      var root = document.documentElement;
+      try {
+        var raw = localStorage.getItem('daily-kanban-sticky-panel');
+        var s = raw ? JSON.parse(raw) : null;
+        var collapsed = !!(s && s.collapsed);
+        var edge = EDGES.indexOf(s && s.edge) >= 0 ? s.edge : 'right';
+        var offset = typeof (s && s.offset) === 'number' && s.offset >= 0 && s.offset <= 1
+          ? s.offset
+          : 0.5;
+        root.setAttribute('data-sticky-collapsed', collapsed ? 'true' : 'false');
+        root.setAttribute('data-sticky-edge', edge);
+        root.style.setProperty('--sticky-panel-offset', (offset * 100) + '%');
+      } catch (e) {
+        root.setAttribute('data-sticky-collapsed', 'false');
+        root.setAttribute('data-sticky-edge', 'right');
+      }
+    })();
   </script>
   <link rel="stylesheet" href="css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
