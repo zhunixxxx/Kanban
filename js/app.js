@@ -9,7 +9,7 @@ const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000;
 const STICKY_NOTES_KEY = 'daily-kanban-sticky-notes';
 const STICKY_PANEL_STATE_KEY = 'daily-kanban-sticky-panel';
 const STICKY_SKIP_DELETE_CONFIRM_KEY = 'daily-kanban-sticky-skip-delete-confirm';
-const DEFAULT_COORDS = { lat: 39.9042, lon: 116.4074 };
+const DEFAULT_COORDS = { lat: 31.2304, lon: 121.4737 };
 
 const QUADRANTS = ['q1', 'q2', 'q3', 'q4'];
 const QUADRANT_LABELS = {
@@ -592,7 +592,7 @@ async function fetchWeather(coords) {
   return {
     temp: data.current?.temperature_2m,
     code: data.current?.weather_code ?? 0,
-    place: coords.fallback && !place ? '北京' : place,
+    place: coords.fallback && !place ? '上海' : place,
     fetchedAt: Date.now(),
   };
 }

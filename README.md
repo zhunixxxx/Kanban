@@ -32,7 +32,7 @@
 
 直接用浏览器打开 `index.html`，或启动本地服务器：
 
-顶部日期旁会显示当地天气（基于 [Open-Meteo](https://open-meteo.com/)，首次需允许浏览器定位；拒绝时使用北京作为默认位置，缓存 30 分钟）。
+顶部日期旁会显示当地天气（基于 [Open-Meteo](https://open-meteo.com/)，首次需允许浏览器定位；未能获取位置时使用上海作为默认位置，缓存 30 分钟）。
 
 ```bash
 python3 -m http.server 8080
