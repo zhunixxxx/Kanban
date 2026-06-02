@@ -47,6 +47,8 @@ let quickAddQuadrant = 'q3';
 let quickAddSkipGroup = false;
 let lastUsedGroup = '';
 let showCompleted = localStorage.getItem(SHOW_DONE_KEY) === 'true';
+let appDialogFinish = null;
+let settingsActivePanel = 'theme';
 
 const taskInput = document.getElementById('taskInput');
 const quickAddHint = document.getElementById('quickAddHint');
@@ -56,18 +58,26 @@ const groupInput = document.getElementById('groupInput');
 const addGroupBtn = document.getElementById('addGroupBtn');
 const modalGroupsList = document.getElementById('modalGroupsList');
 const editGroupsBtn = document.getElementById('editGroupsBtn');
+const weekOverviewBtn = document.getElementById('weekOverviewBtn');
+const weekOverviewModal = document.getElementById('weekOverviewModal');
+const weekOverviewBody = document.getElementById('weekOverviewBody');
+const closeWeekOverviewModal = document.getElementById('closeWeekOverviewModal');
 const groupModal = document.getElementById('groupModal');
 const closeGroupModal = document.getElementById('closeGroupModal');
-const dataBtn = document.getElementById('dataBtn');
-const dataModal = document.getElementById('dataModal');
-const closeDataModalBtn = document.getElementById('closeDataModal');
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsModal = document.getElementById('settingsModal');
+const closeSettingsModal = document.getElementById('closeSettingsModal');
+const appDialogModal = document.getElementById('appDialogModal');
+const appDialogTitle = document.getElementById('appDialogTitle');
+const appDialogDesc = document.getElementById('appDialogDesc');
+const appDialogActions = document.getElementById('appDialogActions');
+const closeAppDialog = document.getElementById('closeAppDialog');
 const exportBtn = document.getElementById('exportBtn');
 const importBtn = document.getElementById('importBtn');
 const importFile = document.getElementById('importFile');
 const showDoneToggle = document.getElementById('showDoneToggle');
 const currentDateEl = document.getElementById('currentDate');
 const currentWeatherEl = document.getElementById('currentWeather');
-const themeMenuBtn = document.getElementById('themeMenuBtn');
 const themeMenu = document.getElementById('themeMenu');
 
 const THEMES = ['light', 'dark', 'pink', 'taro', 'baby', 'velvet', 'forest'];
@@ -133,18 +143,6 @@ function getActiveTheme() {
   return normalizeTheme(document.documentElement.getAttribute('data-theme'));
 }
 
-function closeThemeMenu() {
-  if (!themeMenu || !themeMenuBtn) return;
-  themeMenu.hidden = true;
-  themeMenuBtn.setAttribute('aria-expanded', 'false');
-}
-
-function openThemeMenu() {
-  if (!themeMenu || !themeMenuBtn) return;
-  themeMenu.hidden = false;
-  themeMenuBtn.setAttribute('aria-expanded', 'true');
-}
-
 function updateThemeMenuUI(theme) {
   if (!themeMenu) return;
   const next = normalizeTheme(theme);
@@ -153,8 +151,8 @@ function updateThemeMenuUI(theme) {
     btn.classList.toggle('is-active', active);
     btn.setAttribute('aria-selected', active ? 'true' : 'false');
   });
-  if (themeMenuBtn) {
-    themeMenuBtn.title = `当前：${THEME_LABELS[next]}`;
+  if (settingsBtn) {
+    settingsBtn.title = `设置 · ${THEME_LABELS[next]}`;
   }
 }
 
@@ -175,29 +173,102 @@ function initTheme() {
 }
 
 function bindThemeMenu() {
-  if (!themeMenuBtn || !themeMenu) return;
-
-  themeMenuBtn.addEventListener('click', e => {
-    e.stopPropagation();
-    if (themeMenu.hidden) openThemeMenu();
-    else closeThemeMenu();
-  });
+  if (!themeMenu) return;
 
   themeMenu.querySelectorAll('.theme-option').forEach(btn => {
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
+    btn.addEventListener('click', () => {
       applyTheme(btn.dataset.theme);
-      closeThemeMenu();
     });
   });
+}
 
-  document.addEventListener('click', e => {
-    if (themeMenu.hidden || e.target.closest('.theme-picker')) return;
-    closeThemeMenu();
+function finishAppDialog(result) {
+  if (!appDialogModal) return;
+  appDialogModal.hidden = true;
+  appDialogModal.classList.remove('modal-overlay-top');
+  updateBodyModalClass();
+  const finish = appDialogFinish;
+  appDialogFinish = null;
+  if (finish) finish(result);
+}
+
+function bindAppDialogActions() {
+  if (!appDialogActions) return;
+  appDialogActions.querySelectorAll('[data-app-dialog]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.appDialog;
+      if (action === 'ok' || action === 'confirm') finishAppDialog(true);
+      else finishAppDialog(false);
+    });
   });
+}
 
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeThemeMenu();
+function openAppDialog() {
+  if (!appDialogModal) return;
+  appDialogModal.hidden = false;
+  appDialogModal.classList.add('modal-overlay-top');
+  updateBodyModalClass();
+}
+
+function showAppAlert(message, title = '提示') {
+  return new Promise(resolve => {
+    if (!appDialogModal) {
+      resolve();
+      return;
+    }
+    appDialogFinish = () => resolve();
+    appDialogTitle.textContent = title;
+    appDialogDesc.textContent = message;
+    appDialogActions.innerHTML = '<button type="button" class="btn btn-primary" data-app-dialog="ok">确定</button>';
+    bindAppDialogActions();
+    openAppDialog();
+    appDialogActions.querySelector('[data-app-dialog="ok"]')?.focus();
+  });
+}
+
+function showAppConfirm(message, options = {}) {
+  const {
+    title = '确认',
+    confirmText = '确定',
+    cancelText = '取消',
+    danger = false,
+  } = options;
+  return new Promise(resolve => {
+    if (!appDialogModal) {
+      resolve(false);
+      return;
+    }
+    appDialogFinish = resolve;
+    appDialogTitle.textContent = title;
+    appDialogDesc.textContent = message;
+    const confirmClass = danger ? 'btn btn-ghost task-modal-delete' : 'btn btn-primary';
+    appDialogActions.innerHTML = `
+      <button type="button" class="btn btn-ghost" data-app-dialog="cancel">${escapeHtml(cancelText)}</button>
+      <button type="button" class="${confirmClass}" data-app-dialog="confirm">${escapeHtml(confirmText)}</button>
+    `;
+    bindAppDialogActions();
+    openAppDialog();
+    appDialogActions.querySelector('[data-app-dialog="confirm"]')?.focus();
+  });
+}
+
+function setSettingsPanel(panel) {
+  settingsActivePanel = panel === 'data' ? 'data' : 'theme';
+  document.querySelectorAll('.settings-nav-item').forEach(btn => {
+    const active = btn.dataset.settingsPanel === settingsActivePanel;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('.settings-panel').forEach(el => {
+    const active = el.dataset.settingsPanel === settingsActivePanel;
+    el.classList.toggle('is-active', active);
+    el.hidden = !active;
+  });
+}
+
+function bindSettingsNav() {
+  document.querySelectorAll('.settings-nav-item').forEach(btn => {
+    btn.addEventListener('click', () => setSettingsPanel(btn.dataset.settingsPanel));
   });
 }
 
@@ -211,6 +282,7 @@ function init() {
   render();
   updateQuickAddHint();
   initStickyNotes();
+  bindSettingsNav();
   bindEvents();
 }
 
@@ -757,6 +829,146 @@ function getTodayTasks() {
     .sort(sortTodayTasks);
 }
 
+function getWeekRange(referenceDate = new Date()) {
+  const d = new Date(referenceDate);
+  d.setHours(12, 0, 0, 0);
+  const day = d.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diffToMonday);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return { start: toDateOnly(monday), end: toDateOnly(sunday) };
+}
+
+function getTaskCompletedDate(task) {
+  if (!task.completed) return null;
+  return toDateOnly(task.completedAt || task.createdAt);
+}
+
+function isDateInRange(dateOnly, start, end) {
+  return dateOnly >= start && dateOnly <= end;
+}
+
+function getWeekCompletedTasks() {
+  const { start, end } = getWeekRange();
+  return tasks
+    .filter(t => {
+      const completedDate = getTaskCompletedDate(t);
+      return completedDate && isDateInRange(completedDate, start, end);
+    })
+    .sort((a, b) => {
+      const da = getTaskCompletedDate(a);
+      const db = getTaskCompletedDate(b);
+      if (da !== db) return db.localeCompare(da);
+      return new Date(b.completedAt || b.createdAt) - new Date(a.completedAt || a.createdAt);
+    });
+}
+
+function groupTasksByCompletedDay(taskList) {
+  const map = new Map();
+  taskList.forEach(task => {
+    const day = getTaskCompletedDate(task);
+    if (!map.has(day)) map.set(day, []);
+    map.get(day).push(task);
+  });
+  return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+}
+
+function formatWeekDayLabel(dateOnly) {
+  const today = todayDateOnly();
+  const [y, m, d] = dateOnly.split('-').map(Number);
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const prefix = dateOnly === today ? '今天' : weekdays[new Date(y, m - 1, d).getDay()];
+  return `${prefix} · ${formatDateShort(dateOnly)}`;
+}
+
+function formatCompletedTime(task) {
+  if (!task.completedAt) return '';
+  const d = new Date(task.completedAt);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderWeekOverviewItem(task) {
+  const time = formatCompletedTime(task);
+  const groupBadge = task.group ? renderGroupBadge(task.group) : '';
+  const timeHtml = time ? `<span class="week-overview-time">${escapeHtml(time)}</span>` : '';
+  return `
+    <li class="week-overview-item">
+      <button type="button" class="week-overview-item-body" data-action="open-task" data-id="${task.id}">
+        <span class="week-overview-title">${escapeHtml(task.title)}</span>
+        <div class="week-overview-meta">
+          ${groupBadge}
+          <span class="quadrant-badge today-quadrant-badge" data-quadrant="${task.quadrant}">${QUADRANT_LABELS[task.quadrant]}</span>
+          ${timeHtml}
+        </div>
+      </button>
+    </li>
+  `;
+}
+
+function bindWeekOverviewEvents() {
+  if (!weekOverviewBody) return;
+  weekOverviewBody.querySelectorAll('[data-action="open-task"]').forEach(el => {
+    el.addEventListener('click', () => {
+      closeWeekOverviewModalFn();
+      openTaskModal(el.dataset.id);
+    });
+  });
+}
+
+function renderWeekOverview() {
+  if (!weekOverviewBody) return;
+  const { start, end } = getWeekRange();
+  const completed = getWeekCompletedTasks();
+  const byDay = groupTasksByCompletedDay(completed);
+  const rangeText = `${formatDateShort(start)} – ${formatDateShort(end)}`;
+
+  let html = `
+    <p class="week-overview-summary">
+      <span class="week-overview-range">${escapeHtml(rangeText)}</span>
+      <span class="week-overview-stat">本周已完成 <strong>${completed.length}</strong> 项</span>
+    </p>
+  `;
+
+  if (completed.length === 0) {
+    html += '<p class="week-overview-empty">本周还没有已完成的任务</p>';
+  } else {
+    html += '<div class="week-overview-days">';
+    byDay.forEach(([day, dayTasks]) => {
+      html += `
+        <section class="week-overview-day">
+          <h3 class="week-overview-day-title">
+            ${escapeHtml(formatWeekDayLabel(day))}
+            <span class="week-overview-day-count">${dayTasks.length}</span>
+          </h3>
+          <ul class="week-overview-list">
+            ${dayTasks.map(renderWeekOverviewItem).join('')}
+          </ul>
+        </section>
+      `;
+    });
+    html += '</div>';
+  }
+
+  weekOverviewBody.innerHTML = html;
+  bindWeekOverviewEvents();
+}
+
+function openWeekOverviewModal() {
+  if (!weekOverviewModal) return;
+  renderWeekOverview();
+  weekOverviewModal.hidden = false;
+  updateBodyModalClass();
+}
+
+function closeWeekOverviewModalFn() {
+  if (!weekOverviewModal) return;
+  weekOverviewModal.hidden = true;
+  updateBodyModalClass();
+}
+
 function openGroupModal() {
   groupModal.hidden = false;
   updateBodyModalClass();
@@ -771,9 +983,11 @@ function closeGroupModalFn() {
 
 function updateBodyModalClass() {
   if (
-    !groupModal.hidden
+    appDialogModal && !appDialogModal.hidden
+    || !groupModal.hidden
     || !taskModal.hidden
-    || !dataModal.hidden
+    || !weekOverviewModal.hidden
+    || !settingsModal.hidden
     || !stickyNotesModal.hidden
     || !stickyDeleteConfirmModal.hidden
   ) {
@@ -784,20 +998,26 @@ function updateBodyModalClass() {
 }
 
 function closeTopModal() {
-  if (!stickyDeleteConfirmModal.hidden) closeStickyDeleteConfirmFn();
+  if (appDialogModal && !appDialogModal.hidden) finishAppDialog(false);
+  else if (!stickyDeleteConfirmModal.hidden) closeStickyDeleteConfirmFn();
   else if (!taskModal.hidden) closeTaskModalFn();
-  else if (!dataModal.hidden) closeDataModalFn();
+  else if (!settingsModal.hidden) closeSettingsModalFn();
+  else if (!weekOverviewModal.hidden) closeWeekOverviewModalFn();
   else if (!groupModal.hidden) closeGroupModalFn();
   else if (!stickyNotesModal.hidden) closeStickyNotesModalFn();
 }
 
-function openDataModal() {
-  dataModal.hidden = false;
+function openSettingsModal() {
+  if (!settingsModal) return;
+  setSettingsPanel('theme');
+  updateThemeMenuUI(getActiveTheme());
+  settingsModal.hidden = false;
   updateBodyModalClass();
 }
 
-function closeDataModalFn() {
-  dataModal.hidden = true;
+function closeSettingsModalFn() {
+  if (!settingsModal) return;
+  settingsModal.hidden = true;
   updateBodyModalClass();
 }
 
@@ -859,9 +1079,9 @@ function closeTaskModalFn() {
   updateBodyModalClass();
 }
 
-function saveTaskFromModal() {
+async function saveTaskFromModal() {
   if (isAddMode) {
-    createTaskFromModal();
+    await createTaskFromModal();
     return;
   }
   if (!editingTaskId) return;
@@ -870,7 +1090,7 @@ function saveTaskFromModal() {
 
   const title = taskModalTitle.value.trim();
   if (!title) {
-    alert('标题不能为空。');
+    await showAppAlert('标题不能为空。');
     taskModalTitle.focus();
     return;
   }
@@ -909,10 +1129,10 @@ function saveTaskFromModal() {
   render();
 }
 
-function createTaskFromModal() {
+async function createTaskFromModal() {
   const title = taskModalTitle.value.trim();
   if (!title) {
-    alert('标题不能为空。');
+    await showAppAlert('标题不能为空。');
     taskModalTitle.focus();
     return;
   }
@@ -971,14 +1191,14 @@ function addTaskQuick() {
   taskInput.focus();
 }
 
-function addGroup(char) {
+async function addGroup(char) {
   const normalized = normalizeGroupChar(char);
   if (!normalized) {
-    alert(`分组名不能为空，且不超过 ${MAX_GROUP_NAME_LENGTH} 个字符。`);
+    await showAppAlert(`分组名不能为空，且不超过 ${MAX_GROUP_NAME_LENGTH} 个字符。`);
     return;
   }
   if (groups.some(g => g.char === normalized)) {
-    alert(`分组「${normalized}」已存在。`);
+    await showAppAlert(`分组「${normalized}」已存在。`);
     return;
   }
   groups.push({ char: normalized, color: nextGroupColor() });
@@ -988,12 +1208,12 @@ function addGroup(char) {
   groupInput.focus();
 }
 
-function deleteGroup(char) {
+async function deleteGroup(char) {
   const count = tasks.filter(t => t.group === char).length;
   const msg = count > 0
     ? `确定删除分组「${char}」？${count} 个任务将变为无分组。`
     : `确定删除分组「${char}」？`;
-  if (!confirm(msg)) return;
+  if (!await showAppConfirm(msg, { title: '删除分组', confirmText: '删除', danger: true })) return;
 
   groups = groups.filter(g => g.char !== char);
   tasks.forEach(t => {
@@ -1140,10 +1360,14 @@ function toggleComplete(id) {
   render();
 }
 
-function clearDoneTasks() {
+async function clearDoneTasks() {
   const doneCount = tasks.filter(t => t.completed).length;
   if (doneCount === 0) return;
-  if (!confirm(`确定清除 ${doneCount} 个已完成任务吗？`)) return;
+  if (!await showAppConfirm(`确定清除 ${doneCount} 个已完成任务吗？`, {
+    title: '清除已完成',
+    confirmText: '清除',
+    danger: true,
+  })) return;
   tasks = tasks.filter(t => !t.completed);
   saveTasks();
   render();
@@ -1188,7 +1412,7 @@ function mergeGroups(existing, imported) {
   return [...map.values()];
 }
 
-function applyImport(imported) {
+async function applyImport(imported) {
   const { tasks: importedTasks, groups: importedGroups, stickyNotes: importedStickyNotes, stickyPanelState: importedPanelState } = imported;
 
   if (tasks.length === 0 && groups.length === 0) {
@@ -1203,7 +1427,10 @@ function applyImport(imported) {
       saveStickyPanelState();
       applyStickyPanelState();
     }
-  } else if (confirm(`覆盖现有 ${tasks.length} 个任务、${groups.length} 个分组，导入 ${importedTasks.length} 个任务、${importedGroups.length} 个分组？\n\n确定 = 覆盖\n取消 = 进入合并模式`)) {
+  } else if (await showAppConfirm(
+    `覆盖现有 ${tasks.length} 个任务、${groups.length} 个分组，导入 ${importedTasks.length} 个任务、${importedGroups.length} 个分组？`,
+    { title: '导入方式', confirmText: '覆盖' },
+  )) {
     tasks = importedTasks;
     groups = importedGroups;
     if (importedStickyNotes?.length) {
@@ -1215,7 +1442,10 @@ function applyImport(imported) {
       saveStickyPanelState();
       applyStickyPanelState();
     }
-  } else if (confirm(`合并导入？\n相同 ID 的任务以导入文件为准，分组会合并去重。`)) {
+  } else if (await showAppConfirm(
+    '合并导入？\n相同 ID 的任务以导入文件为准，分组会合并去重。',
+    { title: '导入方式', confirmText: '合并' },
+  )) {
     const map = new Map(tasks.map(t => [t.id, t]));
     importedTasks.forEach(t => map.set(t.id, t));
     tasks = [...map.values()];
@@ -1238,23 +1468,23 @@ function applyImport(imported) {
   return true;
 }
 
-function handleImportFile(file) {
+async function handleImportFile(file) {
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const imported = parseImportData(reader.result);
       if (!imported?.tasks?.length) {
-        alert('无效的文件格式，或文件中没有有效任务。');
+        await showAppAlert('无效的文件格式，或文件中没有有效任务。');
         return;
       }
-      if (applyImport(imported)) {
-        alert(`成功导入 ${imported.tasks.length} 个任务、${imported.groups.length} 个分组。`);
-        closeDataModalFn();
+      if (await applyImport(imported)) {
+        await showAppAlert(`成功导入 ${imported.tasks.length} 个任务、${imported.groups.length} 个分组。`, '导入成功');
+        closeSettingsModalFn();
       }
     } catch {
-      alert('文件解析失败，请检查 JSON 格式。');
+      await showAppAlert('文件解析失败，请检查 JSON 格式。');
     }
     importFile.value = '';
   };
@@ -1523,15 +1753,26 @@ function bindEvents() {
     }
   });
 
+  weekOverviewBtn?.addEventListener('click', openWeekOverviewModal);
+  closeWeekOverviewModal?.addEventListener('click', closeWeekOverviewModalFn);
+  weekOverviewModal?.addEventListener('click', e => {
+    if (e.target === weekOverviewModal) closeWeekOverviewModalFn();
+  });
+
   editGroupsBtn.addEventListener('click', openGroupModal);
   document.addEventListener('click', e => {
     if (groupModal.hidden || e.target.closest('.group-color-picker')) return;
     closeAllGroupColorPickers();
   });
-  dataBtn.addEventListener('click', openDataModal);
-  closeDataModalBtn.addEventListener('click', closeDataModalFn);
-  dataModal.addEventListener('click', e => {
-    if (e.target === dataModal) closeDataModalFn();
+  settingsBtn?.addEventListener('click', openSettingsModal);
+  closeSettingsModal?.addEventListener('click', closeSettingsModalFn);
+  settingsModal?.addEventListener('click', e => {
+    if (e.target === settingsModal) closeSettingsModalFn();
+  });
+
+  closeAppDialog?.addEventListener('click', () => finishAppDialog(false));
+  appDialogModal?.addEventListener('click', e => {
+    if (e.target === appDialogModal) finishAppDialog(false);
   });
 
   closeGroupModal.addEventListener('click', closeGroupModalFn);
@@ -1548,9 +1789,13 @@ function bindEvents() {
   taskModalStartDate.addEventListener('input', syncModalDueToStart);
   taskModalDueDate.addEventListener('change', syncModalStartToDue);
   taskModalDueDate.addEventListener('input', syncModalStartToDue);
-  taskModalDelete.addEventListener('click', () => {
+  taskModalDelete.addEventListener('click', async () => {
     if (!editingTaskId) return;
-    if (!confirm('确定删除这个任务吗？')) return;
+    if (!await showAppConfirm('确定删除这个任务吗？', {
+      title: '删除任务',
+      confirmText: '删除',
+      danger: true,
+    })) return;
     const id = editingTaskId;
     closeTaskModalFn();
     deleteTask(id);
@@ -1574,7 +1819,7 @@ function bindEvents() {
   clearDoneBtn.addEventListener('click', clearDoneTasks);
   exportBtn.addEventListener('click', () => {
     exportTasks();
-    closeDataModalFn();
+    closeSettingsModalFn();
   });
   importBtn.addEventListener('click', () => importFile.click());
   importFile.addEventListener('change', () => handleImportFile(importFile.files[0]));
