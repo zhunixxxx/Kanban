@@ -9,6 +9,13 @@ const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000;
 const STICKY_NOTES_KEY = 'daily-kanban-sticky-notes';
 const STICKY_PANEL_STATE_KEY = 'daily-kanban-sticky-panel';
 const STICKY_SKIP_DELETE_CONFIRM_KEY = 'daily-kanban-sticky-skip-delete-confirm';
+const AUTO_SAVE_ENABLED_KEY = 'daily-kanban-auto-save-enabled';
+const AUTO_SAVE_FILE_NAME_KEY = 'daily-kanban-auto-save-filename';
+const AUTO_SAVE_LAST_KEY = 'daily-kanban-auto-save-last';
+const FS_IDB_NAME = 'daily-kanban-fs';
+const FS_IDB_STORE = 'handles';
+const FS_HANDLE_KEY = 'auto-save';
+const AUTO_SAVE_DEBOUNCE_MS = 800;
 const DEFAULT_COORDS = { lat: 31.2304, lon: 121.4737 };
 
 const QUADRANTS = ['q1', 'q2', 'q3', 'q4'];
@@ -49,6 +56,11 @@ let lastUsedGroup = '';
 let showCompleted = localStorage.getItem(SHOW_DONE_KEY) === 'true';
 let appDialogFinish = null;
 let settingsActivePanel = 'theme';
+let autoSaveEnabled = false;
+let autoSaveFileName = '';
+let autoSaveHandle = null;
+let autoSaveTimer = null;
+let autoSaveState = 'idle';
 
 const taskInput = document.getElementById('taskInput');
 const quickAddHint = document.getElementById('quickAddHint');
@@ -72,6 +84,12 @@ const appDialogTitle = document.getElementById('appDialogTitle');
 const appDialogDesc = document.getElementById('appDialogDesc');
 const appDialogActions = document.getElementById('appDialogActions');
 const closeAppDialog = document.getElementById('closeAppDialog');
+const autoSaveToggle = document.getElementById('autoSaveToggle');
+const pickAutoSaveFileBtn = document.getElementById('pickAutoSaveFileBtn');
+const connectAutoSaveFileBtn = document.getElementById('connectAutoSaveFileBtn');
+const autoSaveStatusEl = document.getElementById('autoSaveStatus');
+const autoSaveUnsupportedEl = document.getElementById('autoSaveUnsupported');
+const autoSaveControls = document.getElementById('autoSaveControls');
 const exportBtn = document.getElementById('exportBtn');
 const importBtn = document.getElementById('importBtn');
 const importFile = document.getElementById('importFile');
@@ -282,7 +300,9 @@ function init() {
   render();
   updateQuickAddHint();
   initStickyNotes();
+  initAutoSave();
   bindSettingsNav();
+  bindAutoSave();
   bindEvents();
 }
 
@@ -374,10 +394,12 @@ function skipQuickAddGroup() {
 
 function saveTasks() {
   localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
+  scheduleAutoSave();
 }
 
 function saveGroups() {
   localStorage.setItem(GROUPS_KEY, JSON.stringify(groups));
+  scheduleAutoSave();
 }
 
 function normalizeGroupChar(value) {
@@ -1011,6 +1033,7 @@ function openSettingsModal() {
   if (!settingsModal) return;
   setSettingsPanel('theme');
   updateThemeMenuUI(getActiveTheme());
+  updateAutoSaveUI();
   settingsModal.hidden = false;
   updateBodyModalClass();
 }
@@ -1373,8 +1396,8 @@ async function clearDoneTasks() {
   render();
 }
 
-function exportTasks() {
-  const data = {
+function buildExportPayload() {
+  return {
     version: 4,
     exportedAt: new Date().toISOString(),
     groups,
@@ -1382,7 +1405,261 @@ function exportTasks() {
     stickyNotes,
     stickyPanelState,
   };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+}
+
+function getExportJson() {
+  return JSON.stringify(buildExportPayload(), null, 2);
+}
+
+function supportsFileSystemAccess() {
+  return typeof window.showSaveFilePicker === 'function';
+}
+
+function openFsIdb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(FS_IDB_NAME, 1);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onupgradeneeded = e => {
+      if (!e.target.result.objectStoreNames.contains(FS_IDB_STORE)) {
+        e.target.result.createObjectStore(FS_IDB_STORE);
+      }
+    };
+  });
+}
+
+async function storeAutoSaveHandle(handle) {
+  const db = await openFsIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FS_IDB_STORE, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.objectStore(FS_IDB_STORE).put(handle, FS_HANDLE_KEY);
+  });
+}
+
+async function loadAutoSaveHandle() {
+  const db = await openFsIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FS_IDB_STORE, 'readonly');
+    const req = tx.objectStore(FS_IDB_STORE).get(FS_HANDLE_KEY);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function ensureAutoSavePermission() {
+  if (!autoSaveHandle) return false;
+  let perm = await autoSaveHandle.queryPermission({ mode: 'readwrite' });
+  if (perm === 'granted') return true;
+  perm = await autoSaveHandle.requestPermission({ mode: 'readwrite' });
+  return perm === 'granted';
+}
+
+function formatAutoSaveLastTime() {
+  try {
+    const raw = localStorage.getItem(AUTO_SAVE_LAST_KEY);
+    if (!raw) return '';
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleString('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
+function updateAutoSaveUI() {
+  if (!autoSaveStatusEl) return;
+
+  if (!supportsFileSystemAccess()) {
+    if (autoSaveUnsupportedEl) autoSaveUnsupportedEl.hidden = false;
+    if (autoSaveControls) autoSaveControls.hidden = true;
+    return;
+  }
+  if (autoSaveUnsupportedEl) autoSaveUnsupportedEl.hidden = true;
+  if (autoSaveControls) autoSaveControls.hidden = false;
+  if (autoSaveToggle) autoSaveToggle.checked = autoSaveEnabled && !!autoSaveHandle;
+
+  const fileLabel = autoSaveFileName ? `「${autoSaveFileName}」` : '未选择文件';
+  const lastTime = formatAutoSaveLastTime();
+
+  if (!autoSaveHandle) {
+    autoSaveStatusEl.textContent = '请选择或关联一个 JSON 文件以启用自动保存。';
+    autoSaveStatusEl.dataset.state = 'idle';
+    return;
+  }
+
+  if (!autoSaveEnabled) {
+    autoSaveStatusEl.textContent = `已关联 ${fileLabel}，勾选上方开关后生效。`;
+    autoSaveStatusEl.dataset.state = 'idle';
+    return;
+  }
+
+  const stateMessages = {
+    idle: `已启用，保存至 ${fileLabel}${lastTime ? ` · 上次写入 ${lastTime}` : ''}`,
+    pending: `正在准备写入 ${fileLabel}…`,
+    saving: `正在写入 ${fileLabel}…`,
+    saved: `已保存至 ${fileLabel}${lastTime ? ` · ${lastTime}` : ''}`,
+    error: `写入 ${fileLabel} 失败，请重新关联文件`,
+    denied: `无法写入 ${fileLabel}，请重新授权或选择文件`,
+  };
+  autoSaveStatusEl.textContent = stateMessages[autoSaveState] || stateMessages.idle;
+  autoSaveStatusEl.dataset.state = autoSaveState;
+}
+
+async function writeAutoSaveFile() {
+  if (!autoSaveEnabled || !autoSaveHandle) return;
+
+  autoSaveState = 'saving';
+  updateAutoSaveUI();
+
+  try {
+    if (!await ensureAutoSavePermission()) {
+      autoSaveState = 'denied';
+      updateAutoSaveUI();
+      return;
+    }
+    const writable = await autoSaveHandle.createWritable();
+    await writable.write(getExportJson());
+    await writable.close();
+    localStorage.setItem(AUTO_SAVE_LAST_KEY, new Date().toISOString());
+    autoSaveState = 'saved';
+  } catch {
+    autoSaveState = 'error';
+    autoSaveHandle = null;
+    autoSaveEnabled = false;
+    localStorage.setItem(AUTO_SAVE_ENABLED_KEY, 'false');
+    if (autoSaveToggle) autoSaveToggle.checked = false;
+  }
+  updateAutoSaveUI();
+}
+
+function scheduleAutoSave() {
+  if (!autoSaveEnabled || !autoSaveHandle) return;
+  autoSaveState = 'pending';
+  updateAutoSaveUI();
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => writeAutoSaveFile(), AUTO_SAVE_DEBOUNCE_MS);
+}
+
+async function applyAutoSaveHandle(handle) {
+  autoSaveHandle = handle;
+  autoSaveFileName = handle.name || 'backup.json';
+  localStorage.setItem(AUTO_SAVE_FILE_NAME_KEY, autoSaveFileName);
+  await storeAutoSaveHandle(handle);
+  autoSaveEnabled = true;
+  localStorage.setItem(AUTO_SAVE_ENABLED_KEY, 'true');
+  if (autoSaveToggle) autoSaveToggle.checked = true;
+  await writeAutoSaveFile();
+  updateAutoSaveUI();
+  return true;
+}
+
+async function pickAutoSaveFile() {
+  if (!supportsFileSystemAccess()) {
+    await showAppAlert('当前浏览器不支持自动保存到本地文件，请使用 Chrome、Edge 等 Chromium 浏览器。');
+    return false;
+  }
+  try {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: `daily-quadrant-${todayDateOnly()}.json`,
+      types: [{
+        description: 'JSON 备份',
+        accept: { 'application/json': ['.json'] },
+      }],
+    });
+    await applyAutoSaveHandle(handle);
+    return true;
+  } catch (err) {
+    if (err?.name !== 'AbortError') {
+      await showAppAlert('选择文件失败，请重试。');
+    }
+    return false;
+  }
+}
+
+async function connectAutoSaveFile() {
+  if (!supportsFileSystemAccess()) {
+    await showAppAlert('当前浏览器不支持自动保存到本地文件，请使用 Chrome、Edge 等 Chromium 浏览器。');
+    return false;
+  }
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{
+        description: 'JSON 备份',
+        accept: { 'application/json': ['.json'] },
+      }],
+    });
+    await applyAutoSaveHandle(handle);
+    return true;
+  } catch (err) {
+    if (err?.name !== 'AbortError') {
+      await showAppAlert('打开文件失败，请重试。');
+    }
+    return false;
+  }
+}
+
+async function initAutoSave() {
+  autoSaveEnabled = localStorage.getItem(AUTO_SAVE_ENABLED_KEY) === 'true';
+  autoSaveFileName = localStorage.getItem(AUTO_SAVE_FILE_NAME_KEY) || '';
+
+  if (!supportsFileSystemAccess()) {
+    updateAutoSaveUI();
+    return;
+  }
+
+  try {
+    autoSaveHandle = await loadAutoSaveHandle();
+  } catch {
+    autoSaveHandle = null;
+  }
+
+  if (!autoSaveHandle) {
+    autoSaveEnabled = false;
+    localStorage.setItem(AUTO_SAVE_ENABLED_KEY, 'false');
+  } else if (autoSaveEnabled) {
+    const ok = await ensureAutoSavePermission();
+    if (!ok) autoSaveState = 'denied';
+    else scheduleAutoSave();
+  }
+
+  updateAutoSaveUI();
+}
+
+function bindAutoSave() {
+  autoSaveToggle?.addEventListener('change', async () => {
+    if (autoSaveToggle.checked) {
+      if (!autoSaveHandle) {
+        const ok = await pickAutoSaveFile();
+        if (!ok) autoSaveToggle.checked = false;
+        return;
+      }
+      autoSaveEnabled = true;
+      localStorage.setItem(AUTO_SAVE_ENABLED_KEY, 'true');
+      scheduleAutoSave();
+      updateAutoSaveUI();
+      return;
+    }
+    autoSaveEnabled = false;
+    localStorage.setItem(AUTO_SAVE_ENABLED_KEY, 'false');
+    clearTimeout(autoSaveTimer);
+    autoSaveState = 'idle';
+    updateAutoSaveUI();
+  });
+
+  pickAutoSaveFileBtn?.addEventListener('click', pickAutoSaveFile);
+  connectAutoSaveFileBtn?.addEventListener('click', connectAutoSaveFile);
+}
+
+function exportTasks() {
+  const blob = new Blob([getExportJson()], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -1995,10 +2272,12 @@ function loadStickyNotes() {
 
 function saveStickyNotes() {
   localStorage.setItem(STICKY_NOTES_KEY, JSON.stringify(stickyNotes));
+  scheduleAutoSave();
 }
 
 function saveStickyPanelState() {
   localStorage.setItem(STICKY_PANEL_STATE_KEY, JSON.stringify(stickyPanelState));
+  scheduleAutoSave();
 }
 
 function formatStickyTime(iso) {

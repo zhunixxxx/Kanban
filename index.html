@@ -264,7 +264,7 @@
           <button type="button" class="settings-nav-item is-active" data-settings-panel="theme" role="tab"
             aria-selected="true" aria-controls="settingsPanelTheme" id="settingsTabTheme">主题</button>
           <button type="button" class="settings-nav-item" data-settings-panel="data" role="tab" aria-selected="false"
-            aria-controls="settingsPanelData" id="settingsTabData">设置</button>
+            aria-controls="settingsPanelData" id="settingsTabData">数据</button>
         </nav>
         <div class="settings-content">
           <section class="settings-panel is-active" id="settingsPanelTheme" data-settings-panel="theme" role="tabpanel"
@@ -275,7 +275,25 @@
           <section class="settings-panel" id="settingsPanelData" data-settings-panel="data" role="tabpanel"
             aria-labelledby="settingsTabData" hidden>
             <h3 class="settings-panel-title">数据备份</h3>
-            <p class="modal-hint">将任务与分组导出为 JSON 文件，或从备份文件恢复。数据仅保存在本机浏览器。</p>
+            <p class="modal-hint">数据默认保存在浏览器本地；也可开启自动保存，将变更实时写入你选择的 JSON 文件。</p>
+            <div class="auto-save-block" id="autoSaveBlock">
+              <h4 class="settings-subtitle">自动保存到本地文件</h4>
+              <p class="modal-hint auto-save-unsupported" id="autoSaveUnsupported" hidden>
+                当前浏览器不支持自动保存，请使用 Chrome、Edge 等 Chromium 内核浏览器。
+              </p>
+              <div id="autoSaveControls">
+                <label class="form-field form-field-row auto-save-toggle">
+                  <input type="checkbox" id="autoSaveToggle">
+                  <span>启用自动保存</span>
+                </label>
+                <div class="auto-save-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" id="pickAutoSaveFileBtn">新建 / 另存为…</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="connectAutoSaveFileBtn">关联已有文件</button>
+                </div>
+                <p class="auto-save-status" id="autoSaveStatus" aria-live="polite"></p>
+              </div>
+            </div>
+            <h4 class="settings-subtitle settings-subtitle-spaced">手动备份</h4>
             <div class="data-io-actions">
               <button type="button" class="btn btn-primary data-io-btn" id="exportBtn">
                 <span class="data-io-label">导出备份</span>
